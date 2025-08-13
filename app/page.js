@@ -2,7 +2,7 @@
 
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 export default function Home() {
   const [user, setUser] = useState(null)
@@ -18,6 +18,8 @@ export default function Home() {
     time: new Date().toTimeString().slice(0, 5)
   })
   const [saving, setSaving] = useState(false)
+  const weightChartRef = useRef(null)
+  const waistChartRef = useRef(null)
   
   const router = useRouter()
   const supabase = createClientComponentClient()
@@ -133,7 +135,7 @@ export default function Home() {
 
     const { error } = await supabase
       .from('measurements')
-      .upsert({
+      .insert({
         user_id: user.id,
         measurement_type_id: modalType.id,
         value: parseFloat(modalData.value),
@@ -169,6 +171,103 @@ export default function Home() {
     }
   }
 
+  const createMiniChart = async (canvasRef, type) => {
+    if (!canvasRef.current) return
+
+    // Dynamic import of Chart.js
+    const { Chart, registerables } = await import('chart.js')
+    Chart.register(...registerables)
+
+    // Get last 7 measurements for the mini chart
+    const { data: recentMeasurements, error } = await supabase
+      .from('measurements')
+      .select(`
+        *,
+        measurement_types (name, unit)
+      `)
+      .eq('measurement_types.name', type === 'weight' ? 'Weight' : 'Waist')
+      .order('date', { ascending: true })
+      .order('created_at', { ascending: true })
+      .limit(7)
+
+    if (error || !recentMeasurements || recentMeasurements.length < 2) return
+
+    const data = recentMeasurements.map(m => m.value)
+    const color = type === 'weight' ? '#007bff' : '#28a745'
+    const unit = type === 'weight' ? 'kg' : 'cm'
+
+    // Destroy existing chart if it exists
+    if (canvasRef.current.chart) {
+      canvasRef.current.chart.destroy()
+    }
+
+    const chart = new Chart(canvasRef.current, {
+      type: 'line',
+      data: {
+        labels: recentMeasurements.map(m => new Date(m.datetime || m.created_at).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })),
+        datasets: [{
+          data: data,
+          borderColor: color,
+          backgroundColor: `${color}20`,
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointHoverBackgroundColor: color,
+          pointHoverBorderColor: '#fff',
+          pointHoverBorderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            enabled: true,
+            mode: 'index',
+            intersect: false,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            titleColor: '#fff',
+            bodyColor: '#fff',
+            borderColor: color,
+            borderWidth: 1,
+            cornerRadius: 6,
+            displayColors: false,
+            callbacks: {
+              title: function(context) {
+                const measurement = recentMeasurements[context[0].dataIndex]
+                return new Date(measurement.datetime || measurement.created_at).toLocaleDateString('en-GB', { 
+                  weekday: 'short', 
+                  month: 'short', 
+                  day: 'numeric' 
+                })
+              },
+              label: function(context) {
+                return `${context.parsed.y} ${unit}`
+              }
+            }
+          }
+        },
+        scales: {
+          x: { display: false },
+          y: { display: false }
+        },
+        elements: {
+          point: { radius: 0 }
+        },
+        interaction: { 
+          intersect: false,
+          mode: 'index'
+        }
+      }
+    })
+
+    // Store chart reference for cleanup
+    canvasRef.current.chart = chart
+  }
+
   const signInWithGoogle = async () => {
     await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -182,10 +281,20 @@ export default function Home() {
     await supabase.auth.signOut()
   }
 
+  // Update charts when measurements change
+  useEffect(() => {
+    if (latestMeasurements['Weight']) {
+      createMiniChart(weightChartRef, 'weight')
+    }
+    if (latestMeasurements['Waist']) {
+      createMiniChart(waistChartRef, 'waist')
+    }
+  }, [latestMeasurements])
+
   if (loading) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="bg-white rounded-2xl p-8 shadow-lg">
           <p>Loading...</p>
         </div>
       </div>
@@ -194,13 +303,16 @@ export default function Home() {
 
   if (!user) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <h1>🏃‍♂️ Health Tracker</h1>
-          <p style={{ marginBottom: '30px', color: '#666' }}>
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-500 to-purple-600">
+        <div className="bg-white rounded-2xl p-10 shadow-2xl max-w-md w-full mx-4 text-center">
+          <h1 className="text-3xl font-bold mb-4">🏃‍♂️ Health Tracker</h1>
+          <p className="text-gray-600 mb-8">
             Your personal health and fitness dashboard
           </p>
-          <button onClick={signInWithGoogle} className="google-btn">
+          <button 
+            onClick={signInWithGoogle} 
+            className="flex items-center justify-center gap-3 w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+          >
             <svg width="20" height="20" viewBox="0 0 24 24">
               <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
               <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
@@ -218,274 +330,29 @@ export default function Home() {
   const waistType = measurementTypes.find(type => type.name === 'Waist')
 
   return (
-    <>
-      <style jsx>{`
-        .dashboard-container {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 20px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-        }
-
-        .dashboard-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 40px;
-          background: white;
-          padding: 20px 30px;
-          border-radius: 16px;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-
-        .dashboard-title {
-          font-size: 28px;
-          font-weight: 600;
-          color: #1a1a1a;
-          margin: 0;
-        }
-
-        .logout-btn {
-          background: #ff4757;
-          color: white;
-          border: none;
-          padding: 10px 20px;
-          border-radius: 8px;
-          cursor: pointer;
-          font-weight: 500;
-          transition: background 0.2s;
-        }
-
-        .logout-btn:hover {
-          background: #ff3838;
-        }
-
-        .widgets-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-          gap: 24px;
-          margin-bottom: 40px;
-        }
-
-        .widget {
-          background: white;
-          border-radius: 20px;
-          padding: 28px;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-          transition: transform 0.2s, box-shadow 0.2s;
-          position: relative;
-          border: 1px solid #f0f0f0;
-        }
-
-        .widget:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-        }
-
-        .widget-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 20px;
-        }
-
-        .widget-title {
-          font-size: 16px;
-          font-weight: 600;
-          color: #666;
-          margin: 0;
-        }
-
-        .add-btn {
-          background: #007bff;
-          color: white;
-          border: none;
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 18px;
-          font-weight: bold;
-          transition: background 0.2s;
-        }
-
-        .add-btn:hover {
-          background: #0056b3;
-        }
-
-        .measurement-value {
-          font-size: 48px;
-          font-weight: 700;
-          color: #1a1a1a;
-          margin: 0;
-          line-height: 1;
-        }
-
-        .measurement-unit {
-          font-size: 24px;
-          color: #666;
-          margin-left: 8px;
-        }
-
-        .measurement-date {
-          font-size: 14px;
-          color: #999;
-          margin-top: 8px;
-        }
-
-        .change-indicator {
-          display: flex;
-          align-items: center;
-          margin-top: 12px;
-          font-size: 14px;
-          font-weight: 600;
-        }
-
-        .change-arrow {
-          margin-right: 4px;
-          font-size: 16px;
-        }
-
-        .change-positive {
-          color: #dc3545;
-        }
-
-        .change-negative {
-          color: #28a745;
-        }
-
-        .no-data {
-          text-align: center;
-          color: #999;
-          font-style: italic;
-          padding: 40px 20px;
-        }
-
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0,0,0,0.5);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-
-        .modal {
-          background: white;
-          border-radius: 16px;
-          padding: 32px;
-          width: 90%;
-          max-width: 400px;
-          box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 24px;
-        }
-
-        .modal-title {
-          font-size: 20px;
-          font-weight: 600;
-          color: #1a1a1a;
-          margin: 0;
-        }
-
-        .close-btn {
-          background: none;
-          border: none;
-          font-size: 24px;
-          color: #999;
-          cursor: pointer;
-          padding: 0;
-          width: 30px;
-          height: 30px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .form-group {
-          margin-bottom: 20px;
-        }
-
-        .form-label {
-          display: block;
-          margin-bottom: 8px;
-          font-weight: 600;
-          color: #333;
-        }
-
-        .form-input {
-          width: 100%;
-          padding: 12px 16px;
-          border: 2px solid #e9ecef;
-          border-radius: 8px;
-          font-size: 16px;
-          transition: border-color 0.2s;
-          box-sizing: border-box;
-        }
-
-        .form-input:focus {
-          outline: none;
-          border-color: #007bff;
-        }
-
-        .form-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 16px;
-        }
-
-        .save-btn {
-          width: 100%;
-          background: #007bff;
-          color: white;
-          border: none;
-          padding: 14px;
-          border-radius: 8px;
-          font-size: 16px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-
-        .save-btn:hover:not(:disabled) {
-          background: #0056b3;
-        }
-
-        .save-btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-      `}</style>
-
-      <div className="dashboard-container">
-        <div className="dashboard-header">
-          <h1 className="dashboard-title">Health Dashboard</h1>
-          <button onClick={signOut} className="logout-btn">
+    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 p-5">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-10 bg-white rounded-2xl p-6 shadow-lg">
+          <h1 className="text-3xl font-bold text-gray-800">Health Dashboard</h1>
+          <button 
+            onClick={signOut} 
+            className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors"
+          >
             Sign Out
           </button>
         </div>
 
-        <div className="widgets-grid">
+        {/* Widgets Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Weight Widget */}
-          <div className="widget">
-            <div className="widget-header">
-              <h3 className="widget-title">Current Weight</h3>
+          <div className="bg-white rounded-2xl p-7 shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-semibold text-gray-600">Weight</h3>
               {weightType && (
                 <button 
-                  className="add-btn" 
                   onClick={() => openModal(weightType)}
+                  className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-lg font-bold hover:bg-blue-700 transition-colors"
                   title="Add weight measurement"
                 >
                   +
@@ -495,32 +362,37 @@ export default function Home() {
             
             {latestMeasurements['Weight'] ? (
               <>
-                <div style={{ display: 'flex', alignItems: 'baseline' }}>
-                  <span className="measurement-value">
-                    {latestMeasurements['Weight'].value}
-                  </span>
-                  <span className="measurement-unit">kg</span>
+                <div className="flex items-baseline gap-4 mb-3">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-5xl font-bold text-gray-800">
+                      {latestMeasurements['Weight'].value}
+                    </span>
+                    <span className="text-2xl text-gray-500">kg</span>
+                  </div>
+                  {previousMeasurements['Weight'] && (() => {
+                    const change = calculateChange(latestMeasurements['Weight'], previousMeasurements['Weight'])
+                    if (change && (change.isIncrease || change.isDecrease)) {
+                      return (
+                        <div className={`flex items-center text-sm font-semibold ${change.isIncrease ? 'text-red-500' : 'text-green-500'}`}>
+                          <span className="text-base mr-1">
+                            {change.isIncrease ? '↗' : '↘'}
+                          </span>
+                          {change.value}
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
                 </div>
-                <div className="measurement-date">
+                <div className="text-sm text-gray-500 mb-3">
                   {formatDateTime(latestMeasurements['Weight'].date, latestMeasurements['Weight'].created_at)}
                 </div>
-                {previousMeasurements['Weight'] && (() => {
-                  const change = calculateChange(latestMeasurements['Weight'], previousMeasurements['Weight'])
-                  if (change && (change.isIncrease || change.isDecrease)) {
-                    return (
-                      <div className={`change-indicator ${change.isIncrease ? 'change-positive' : 'change-negative'}`}>
-                        <span className="change-arrow">
-                          {change.isIncrease ? '↗' : '↘'}
-                        </span>
-                        {change.value} kg
-                      </div>
-                    )
-                  }
-                  return null
-                })()}
+                <div className="h-[18px]">
+                  <canvas ref={weightChartRef} className="w-full h-full"></canvas>
+                </div>
               </>
             ) : (
-              <div className="no-data">
+              <div className="text-center text-gray-500 italic py-10">
                 No weight measurements yet.<br />
                 Click + to add your first measurement.
               </div>
@@ -528,13 +400,13 @@ export default function Home() {
           </div>
 
           {/* Waist Widget */}
-          <div className="widget">
-            <div className="widget-header">
-              <h3 className="widget-title">Current Waist Circumference</h3>
+          <div className="bg-white rounded-2xl p-7 shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-lg font-semibold text-gray-600">Waist Circumference</h3>
               {waistType && (
                 <button 
-                  className="add-btn" 
                   onClick={() => openModal(waistType)}
+                  className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-lg font-bold hover:bg-blue-700 transition-colors"
                   title="Add waist measurement"
                 >
                   +
@@ -544,32 +416,37 @@ export default function Home() {
             
             {latestMeasurements['Waist'] ? (
               <>
-                <div style={{ display: 'flex', alignItems: 'baseline' }}>
-                  <span className="measurement-value">
-                    {latestMeasurements['Waist'].value}
-                  </span>
-                  <span className="measurement-unit">cm</span>
+                <div className="flex items-baseline gap-4 mb-3">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-5xl font-bold text-gray-800">
+                      {latestMeasurements['Waist'].value}
+                    </span>
+                    <span className="text-2xl text-gray-500">cm</span>
+                  </div>
+                  {previousMeasurements['Waist'] && (() => {
+                    const change = calculateChange(latestMeasurements['Waist'], previousMeasurements['Waist'])
+                    if (change && (change.isIncrease || change.isDecrease)) {
+                      return (
+                        <div className={`flex items-center text-sm font-semibold ${change.isIncrease ? 'text-red-500' : 'text-green-500'}`}>
+                          <span className="text-base mr-1">
+                            {change.isIncrease ? '↗' : '↘'}
+                          </span>
+                          {change.value}
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
                 </div>
-                <div className="measurement-date">
+                <div className="text-sm text-gray-500 mb-3">
                   {formatDateTime(latestMeasurements['Waist'].date, latestMeasurements['Waist'].created_at)}
                 </div>
-                {previousMeasurements['Waist'] && (() => {
-                  const change = calculateChange(latestMeasurements['Waist'], previousMeasurements['Waist'])
-                  if (change && (change.isIncrease || change.isDecrease)) {
-                    return (
-                      <div className={`change-indicator ${change.isIncrease ? 'change-positive' : 'change-negative'}`}>
-                        <span className="change-arrow">
-                          {change.isIncrease ? '↗' : '↘'}
-                        </span>
-                        {change.value} cm
-                      </div>
-                    )
-                  }
-                  return null
-                })()}
+                <div className="h-[18px]">
+                  <canvas ref={waistChartRef} className="w-full h-full"></canvas>
+                </div>
               </>
             ) : (
-              <div className="no-data">
+              <div className="text-center text-gray-500 italic py-10">
                 No waist measurements yet.<br />
                 Click + to add your first measurement.
               </div>
@@ -580,16 +457,21 @@ export default function Home() {
 
       {/* Modal for adding measurements */}
       {showModal && modalType && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">Add {modalType.name} Measurement</h2>
-              <button className="close-btn" onClick={closeModal}>×</button>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-gray-800">Add {modalType.name} Measurement</h2>
+              <button 
+                onClick={closeModal}
+                className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                ×
+              </button>
             </div>
             
             <form onSubmit={saveMeasurement}>
-              <div className="form-group">
-                <label className="form-label">
+              <div className="mb-5">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
                   {modalType.name} ({modalType.unit})
                 </label>
                 <input
@@ -598,31 +480,31 @@ export default function Home() {
                   placeholder={modalType.name === 'Weight' ? 'e.g. 85.5' : 'e.g. 92.5'}
                   value={modalData.value}
                   onChange={(e) => setModalData({...modalData, value: e.target.value})}
-                  className="form-input"
+                  className="w-full p-3 border-2 border-gray-200 rounded-lg text-lg focus:outline-none focus:border-blue-500"
                   required
                   autoFocus
                 />
               </div>
               
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Date</label>
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Date</label>
                   <input
                     type="date"
                     value={modalData.date}
                     onChange={(e) => setModalData({...modalData, date: e.target.value})}
-                    className="form-input"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
                     required
                   />
                 </div>
                 
-                <div className="form-group">
-                  <label className="form-label">Time</label>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Time</label>
                   <input
                     type="time"
                     value={modalData.time}
                     onChange={(e) => setModalData({...modalData, time: e.target.value})}
-                    className="form-input"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
                     required
                   />
                 </div>
@@ -630,8 +512,8 @@ export default function Home() {
               
               <button 
                 type="submit" 
-                className="save-btn"
                 disabled={saving}
+                className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {saving ? 'Saving...' : `Save ${modalType.name}`}
               </button>
@@ -639,6 +521,6 @@ export default function Home() {
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }
