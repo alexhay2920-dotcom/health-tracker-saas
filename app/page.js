@@ -7,11 +7,12 @@ import { useEffect, useState } from 'react'
 export default function Home() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [measurementTypes, setMeasurementTypes] = useState([])
   const [measurements, setMeasurements] = useState([])
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
-    weight_kg: '',
-    waist_cm: '',
+    measurement_type_id: '',
+    value: '',
     notes: ''
   })
   const [saving, setSaving] = useState(false)
@@ -26,7 +27,8 @@ export default function Home() {
       setLoading(false)
       
       if (user) {
-        loadMeasurements()
+        loadMeasurementTypes()
+        loadRecentMeasurements()
       }
     }
 
@@ -36,11 +38,13 @@ export default function Home() {
       (event, session) => {
         if (event === 'SIGNED_IN' && session) {
           setUser(session.user)
-          loadMeasurements()
+          loadMeasurementTypes()
+          loadRecentMeasurements()
           router.refresh()
         } else if (event === 'SIGNED_OUT') {
           setUser(null)
           setMeasurements([])
+          setMeasurementTypes([])
         }
       }
     )
@@ -48,12 +52,39 @@ export default function Home() {
     return () => subscription.unsubscribe()
   }, [router, supabase.auth])
 
-  const loadMeasurements = async () => {
+  const loadMeasurementTypes = async () => {
     const { data, error } = await supabase
-      .from('body_measurements')
+      .from('measurement_types')
       .select('*')
+      .order('name')
+    
+    if (error) {
+      console.error('Error loading measurement types:', error)
+    } else {
+      setMeasurementTypes(data || [])
+      // Set default to Weight if available
+      if (data && data.length > 0 && !formData.measurement_type_id) {
+        const weightType = data.find(type => type.name === 'Weight')
+        if (weightType) {
+          setFormData(prev => ({ ...prev, measurement_type_id: weightType.id }))
+        }
+      }
+    }
+  }
+
+  const loadRecentMeasurements = async () => {
+    const { data, error } = await supabase
+      .from('measurements')
+      .select(`
+        *,
+        measurement_types (
+          name,
+          unit
+        )
+      `)
       .order('date', { ascending: false })
-      .limit(10)
+      .order('created_at', { ascending: false })
+      .limit(20)
     
     if (error) {
       console.error('Error loading measurements:', error)
@@ -66,31 +97,52 @@ export default function Home() {
     e.preventDefault()
     setSaving(true)
 
+    if (!formData.measurement_type_id || !formData.value) {
+      alert('Please select a measurement type and enter a value')
+      setSaving(false)
+      return
+    }
+
     const { error } = await supabase
-      .from('body_measurements')
+      .from('measurements')
       .upsert({
         user_id: user.id,
+        measurement_type_id: parseInt(formData.measurement_type_id),
+        value: parseFloat(formData.value),
         date: formData.date,
-        weight_kg: formData.weight_kg ? parseFloat(formData.weight_kg) : null,
-        waist_cm: formData.waist_cm ? parseFloat(formData.waist_cm) : null,
         notes: formData.notes || null
       })
 
     if (error) {
       console.error('Error saving measurement:', error)
-      alert('Error saving measurement')
+      alert('Error saving measurement: ' + error.message)
     } else {
       alert('Measurement saved!')
       setFormData({
         date: new Date().toISOString().split('T')[0],
-        weight_kg: '',
-        waist_cm: '',
+        measurement_type_id: formData.measurement_type_id, // Keep the same type selected
+        value: '',
         notes: ''
       })
-      loadMeasurements()
+      loadRecentMeasurements()
     }
     
     setSaving(false)
+  }
+
+  const deleteMeasurement = async (id) => {
+    if (!confirm('Are you sure you want to delete this measurement?')) return
+
+    const { error } = await supabase
+      .from('measurements')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      alert('Error deleting measurement')
+    } else {
+      loadRecentMeasurements()
+    }
   }
 
   const signInWithGoogle = async () => {
@@ -104,6 +156,10 @@ export default function Home() {
 
   const signOut = async () => {
     await supabase.auth.signOut()
+  }
+
+  const getSelectedMeasurementType = () => {
+    return measurementTypes.find(type => type.id === parseInt(formData.measurement_type_id))
   }
 
   if (loading) {
@@ -150,7 +206,7 @@ export default function Home() {
 
         {/* Log New Measurement */}
         <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', marginBottom: '30px' }}>
-          <h2 style={{ marginBottom: '20px' }}>Log Today's Measurements</h2>
+          <h2 style={{ marginBottom: '20px' }}>Log New Measurement</h2>
           
           <form onSubmit={saveMeasurement}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
@@ -166,26 +222,34 @@ export default function Home() {
               </div>
               
               <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Weight (kg):</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  placeholder="e.g. 85.5"
-                  value={formData.weight_kg}
-                  onChange={(e) => setFormData({...formData, weight_kg: e.target.value})}
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Measurement Type:</label>
+                <select
+                  value={formData.measurement_type_id}
+                  onChange={(e) => setFormData({...formData, measurement_type_id: e.target.value})}
                   style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
-                />
+                  required
+                >
+                  <option value="">Select type...</option>
+                  {measurementTypes.map(type => (
+                    <option key={type.id} value={type.id}>
+                      {type.name} ({type.unit})
+                    </option>
+                  ))}
+                </select>
               </div>
               
               <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Waist (cm):</label>
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                  Value {getSelectedMeasurementType() && `(${getSelectedMeasurementType().unit})`}:
+                </label>
                 <input
                   type="number"
                   step="0.1"
-                  placeholder="e.g. 92.5"
-                  value={formData.waist_cm}
-                  onChange={(e) => setFormData({...formData, waist_cm: e.target.value})}
+                  placeholder={getSelectedMeasurementType()?.name === 'Weight' ? 'e.g. 85.5' : 'e.g. 92.5'}
+                  value={formData.value}
+                  onChange={(e) => setFormData({...formData, value: e.target.value})}
                   style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
+                  required
                 />
               </div>
             </div>
@@ -230,9 +294,10 @@ export default function Home() {
                 <thead style={{ background: '#f8f9fa' }}>
                   <tr>
                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Date</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Weight (kg)</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Waist (cm)</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Type</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Value</th>
                     <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Notes</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -242,13 +307,29 @@ export default function Home() {
                         {new Date(measurement.date).toLocaleDateString()}
                       </td>
                       <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {measurement.weight_kg || '-'}
+                        {measurement.measurement_types?.name}
                       </td>
                       <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {measurement.waist_cm || '-'}
+                        {measurement.value} {measurement.measurement_types?.unit}
                       </td>
                       <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
                         {measurement.notes || '-'}
+                      </td>
+                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                        <button
+                          onClick={() => deleteMeasurement(measurement.id)}
+                          style={{
+                            background: '#dc3545',
+                            color: 'white',
+                            border: 'none',
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}
