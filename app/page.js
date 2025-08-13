@@ -174,98 +174,102 @@ export default function Home() {
   const createMiniChart = async (canvasRef, type) => {
     if (!canvasRef.current) return
 
-    // Dynamic import of Chart.js
-    const { Chart, registerables } = await import('chart.js')
-    Chart.register(...registerables)
+    try {
+      // Dynamic import of Chart.js
+      const { Chart, registerables } = await import('chart.js')
+      Chart.register(...registerables)
 
-    // Get last 7 measurements for the mini chart
-    const { data: recentMeasurements, error } = await supabase
-      .from('measurements')
-      .select(`
-        *,
-        measurement_types (name, unit)
-      `)
-      .eq('measurement_types.name', type === 'weight' ? 'Weight' : 'Waist')
-      .order('date', { ascending: true })
-      .order('created_at', { ascending: true })
-      .limit(7)
+      // Get last 7 measurements for the mini chart
+      const { data: recentMeasurements, error } = await supabase
+        .from('measurements')
+        .select(`
+          *,
+          measurement_types (name, unit)
+        `)
+        .eq('measurement_types.name', type === 'weight' ? 'Weight' : 'Waist')
+        .order('date', { ascending: true })
+        .order('created_at', { ascending: true })
+        .limit(7)
 
-    if (error || !recentMeasurements || recentMeasurements.length < 2) return
+      if (error || !recentMeasurements || recentMeasurements.length < 2) return
 
-    const data = recentMeasurements.map(m => m.value)
-    const color = type === 'weight' ? '#007bff' : '#28a745'
-    const unit = type === 'weight' ? 'kg' : 'cm'
+      const data = recentMeasurements.map(m => m.value)
+      const color = type === 'weight' ? '#3b82f6' : '#10b981'
+      const unit = type === 'weight' ? 'kg' : 'cm'
 
-    // Destroy existing chart if it exists
-    if (canvasRef.current.chart) {
-      canvasRef.current.chart.destroy()
-    }
+      // Destroy existing chart if it exists
+      if (canvasRef.current.chart) {
+        canvasRef.current.chart.destroy()
+      }
 
-    const chart = new Chart(canvasRef.current, {
-      type: 'line',
-      data: {
-        labels: recentMeasurements.map(m => new Date(m.datetime || m.created_at).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })),
-        datasets: [{
-          data: data,
-          borderColor: color,
-          backgroundColor: `${color}20`,
-          borderWidth: 2,
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          pointHoverBackgroundColor: color,
-          pointHoverBorderColor: '#fff',
-          pointHoverBorderWidth: 2
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            enabled: true,
-            mode: 'index',
-            intersect: false,
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-            titleColor: '#fff',
-            bodyColor: '#fff',
+      const chart = new Chart(canvasRef.current, {
+        type: 'line',
+        data: {
+          labels: recentMeasurements.map(m => new Date(m.datetime || m.created_at).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })),
+          datasets: [{
+            data: data,
             borderColor: color,
-            borderWidth: 1,
-            cornerRadius: 6,
-            displayColors: false,
-            callbacks: {
-              title: function(context) {
-                const measurement = recentMeasurements[context[0].dataIndex]
-                return new Date(measurement.datetime || measurement.created_at).toLocaleDateString('en-GB', { 
-                  weekday: 'short', 
-                  month: 'short', 
-                  day: 'numeric' 
-                })
-              },
-              label: function(context) {
-                return `${context.parsed.y} ${unit}`
+            backgroundColor: `${color}20`,
+            borderWidth: 2,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            pointHoverBackgroundColor: color,
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              mode: 'index',
+              intersect: false,
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              titleColor: '#fff',
+              bodyColor: '#fff',
+              borderColor: color,
+              borderWidth: 1,
+              cornerRadius: 6,
+              displayColors: false,
+              callbacks: {
+                title: function(context) {
+                  const measurement = recentMeasurements[context[0].dataIndex]
+                  return new Date(measurement.datetime || measurement.created_at).toLocaleDateString('en-GB', { 
+                    weekday: 'short', 
+                    month: 'short', 
+                    day: 'numeric' 
+                  })
+                },
+                label: function(context) {
+                  return `${context.parsed.y} ${unit}`
+                }
               }
             }
+          },
+          scales: {
+            x: { display: false },
+            y: { display: false }
+          },
+          elements: {
+            point: { radius: 0 }
+          },
+          interaction: { 
+            intersect: false,
+            mode: 'index'
           }
-        },
-        scales: {
-          x: { display: false },
-          y: { display: false }
-        },
-        elements: {
-          point: { radius: 0 }
-        },
-        interaction: { 
-          intersect: false,
-          mode: 'index'
         }
-      }
-    })
+      })
 
-    // Store chart reference for cleanup
-    canvasRef.current.chart = chart
+      // Store chart reference for cleanup
+      canvasRef.current.chart = chart
+    } catch (error) {
+      console.error('Error creating mini chart:', error)
+    }
   }
 
   const signInWithGoogle = async () => {
@@ -293,9 +297,9 @@ export default function Home() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
         <div className="bg-white rounded-2xl p-8 shadow-lg">
-          <p>Loading...</p>
+          <p className="text-lg">Loading...</p>
         </div>
       </div>
     )
@@ -303,7 +307,7 @@ export default function Home() {
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-500 to-purple-600">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
         <div className="bg-white rounded-2xl p-10 shadow-2xl max-w-md w-full mx-4 text-center">
           <h1 className="text-3xl font-bold mb-4">🏃‍♂️ Health Tracker</h1>
           <p className="text-gray-600 mb-8">
@@ -330,14 +334,14 @@ export default function Home() {
   const waistType = measurementTypes.find(type => type.name === 'Waist')
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 p-5">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600">
+      <div className="container mx-auto px-4 py-8 max-w-6xl">
         {/* Header */}
         <div className="flex justify-between items-center mb-10 bg-white rounded-2xl p-6 shadow-lg">
           <h1 className="text-3xl font-bold text-gray-800">Health Dashboard</h1>
           <button 
             onClick={signOut} 
-            className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors"
+            className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors font-medium"
           >
             Sign Out
           </button>
@@ -387,7 +391,7 @@ export default function Home() {
                 <div className="text-sm text-gray-500 mb-3">
                   {formatDateTime(latestMeasurements['Weight'].date, latestMeasurements['Weight'].created_at)}
                 </div>
-                <div className="h-[18px]">
+                <div className="w-full h-[18px]">
                   <canvas ref={weightChartRef} className="w-full h-full"></canvas>
                 </div>
               </>
@@ -441,7 +445,7 @@ export default function Home() {
                 <div className="text-sm text-gray-500 mb-3">
                   {formatDateTime(latestMeasurements['Waist'].date, latestMeasurements['Waist'].created_at)}
                 </div>
-                <div className="h-[18px]">
+                <div className="w-full h-[18px]">
                   <canvas ref={waistChartRef} className="w-full h-full"></canvas>
                 </div>
               </>
