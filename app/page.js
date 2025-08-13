@@ -8,12 +8,14 @@ export default function Home() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [measurementTypes, setMeasurementTypes] = useState([])
-  const [measurements, setMeasurements] = useState([])
-  const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
-    measurement_type_id: '',
+  const [latestMeasurements, setLatestMeasurements] = useState({})
+  const [previousMeasurements, setPreviousMeasurements] = useState({})
+  const [showModal, setShowModal] = useState(false)
+  const [modalType, setModalType] = useState(null)
+  const [modalData, setModalData] = useState({
     value: '',
-    notes: ''
+    date: new Date().toISOString().split('T')[0],
+    time: new Date().toTimeString().slice(0, 5)
   })
   const [saving, setSaving] = useState(false)
   
@@ -27,8 +29,8 @@ export default function Home() {
       setLoading(false)
       
       if (user) {
-        loadMeasurementTypes()
-        loadRecentMeasurements()
+        await loadMeasurementTypes()
+        await loadLatestMeasurements()
       }
     }
 
@@ -38,13 +40,11 @@ export default function Home() {
       (event, session) => {
         if (event === 'SIGNED_IN' && session) {
           setUser(session.user)
-          loadMeasurementTypes()
-          loadRecentMeasurements()
           router.refresh()
         } else if (event === 'SIGNED_OUT') {
           setUser(null)
-          setMeasurements([])
-          setMeasurementTypes([])
+          setLatestMeasurements({})
+          setPreviousMeasurements({})
         }
       }
     )
@@ -62,86 +62,110 @@ export default function Home() {
       console.error('Error loading measurement types:', error)
     } else {
       setMeasurementTypes(data || [])
-      // Set default to Weight if available
-      if (data && data.length > 0 && !formData.measurement_type_id) {
-        const weightType = data.find(type => type.name === 'Weight')
-        if (weightType) {
-          setFormData(prev => ({ ...prev, measurement_type_id: weightType.id }))
-        }
-      }
     }
   }
 
-  const loadRecentMeasurements = async () => {
-    const { data, error } = await supabase
+  const loadLatestMeasurements = async () => {
+    // Get latest measurements for each type
+    const { data: latest, error: latestError } = await supabase
       .from('measurements')
       .select(`
         *,
-        measurement_types (
-          name,
-          unit
-        )
+        measurement_types (name, unit)
       `)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(20)
-    
-    if (error) {
-      console.error('Error loading measurements:', error)
-    } else {
-      setMeasurements(data || [])
+
+    if (latestError) {
+      console.error('Error loading latest measurements:', latestError)
+      return
     }
+
+    // Group by measurement type and get the latest for each
+    const latestByType = {}
+    const previousByType = {}
+    
+    latest.forEach(measurement => {
+      const typeName = measurement.measurement_types.name
+      if (!latestByType[typeName]) {
+        latestByType[typeName] = measurement
+      } else if (!previousByType[typeName]) {
+        previousByType[typeName] = measurement
+      }
+    })
+
+    setLatestMeasurements(latestByType)
+    setPreviousMeasurements(previousByType)
+  }
+
+  const openModal = (measurementType) => {
+    setModalType(measurementType)
+    setModalData({
+      value: '',
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toTimeString().slice(0, 5)
+    })
+    setShowModal(true)
+  }
+
+  const closeModal = () => {
+    setShowModal(false)
+    setModalType(null)
+    setModalData({
+      value: '',
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toTimeString().slice(0, 5)
+    })
   }
 
   const saveMeasurement = async (e) => {
     e.preventDefault()
     setSaving(true)
 
-    if (!formData.measurement_type_id || !formData.value) {
-      alert('Please select a measurement type and enter a value')
+    if (!modalData.value) {
+      alert('Please enter a measurement value')
       setSaving(false)
       return
     }
+
+    // Combine date and time
+    const datetime = new Date(`${modalData.date}T${modalData.time}`)
 
     const { error } = await supabase
       .from('measurements')
       .upsert({
         user_id: user.id,
-        measurement_type_id: parseInt(formData.measurement_type_id),
-        value: parseFloat(formData.value),
-        date: formData.date,
-        notes: formData.notes || null
+        measurement_type_id: modalType.id,
+        value: parseFloat(modalData.value),
+        date: modalData.date,
+        created_at: datetime.toISOString()
       })
 
     if (error) {
       console.error('Error saving measurement:', error)
       alert('Error saving measurement: ' + error.message)
     } else {
-      alert('Measurement saved!')
-      setFormData({
-        date: new Date().toISOString().split('T')[0],
-        measurement_type_id: formData.measurement_type_id, // Keep the same type selected
-        value: '',
-        notes: ''
-      })
-      loadRecentMeasurements()
+      closeModal()
+      await loadLatestMeasurements()
     }
     
     setSaving(false)
   }
 
-  const deleteMeasurement = async (id) => {
-    if (!confirm('Are you sure you want to delete this measurement?')) return
+  const formatDateTime = (dateStr, createdAt) => {
+    const date = new Date(createdAt || dateStr)
+    const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    const day = date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+    return `${time} ${day}`
+  }
 
-    const { error } = await supabase
-      .from('measurements')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      alert('Error deleting measurement')
-    } else {
-      loadRecentMeasurements()
+  const calculateChange = (latest, previous) => {
+    if (!latest || !previous) return null
+    const change = latest.value - previous.value
+    return {
+      value: Math.abs(change).toFixed(1),
+      isIncrease: change > 0,
+      isDecrease: change < 0
     }
   }
 
@@ -156,10 +180,6 @@ export default function Home() {
 
   const signOut = async () => {
     await supabase.auth.signOut()
-  }
-
-  const getSelectedMeasurementType = () => {
-    return measurementTypes.find(type => type.id === parseInt(formData.measurement_type_id))
   }
 
   if (loading) {
@@ -194,151 +214,431 @@ export default function Home() {
     )
   }
 
+  const weightType = measurementTypes.find(type => type.name === 'Weight')
+  const waistType = measurementTypes.find(type => type.name === 'Waist')
+
   return (
-    <div className="container">
-      <div className="dashboard">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-          <h1>Health Tracker Dashboard</h1>
+    <>
+      <style jsx>{`
+        .dashboard-container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+        }
+
+        .dashboard-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 40px;
+          background: white;
+          padding: 20px 30px;
+          border-radius: 16px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .dashboard-title {
+          font-size: 28px;
+          font-weight: 600;
+          color: #1a1a1a;
+          margin: 0;
+        }
+
+        .logout-btn {
+          background: #ff4757;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: background 0.2s;
+        }
+
+        .logout-btn:hover {
+          background: #ff3838;
+        }
+
+        .widgets-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          gap: 24px;
+          margin-bottom: 40px;
+        }
+
+        .widget {
+          background: white;
+          border-radius: 20px;
+          padding: 28px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+          transition: transform 0.2s, box-shadow 0.2s;
+          position: relative;
+          border: 1px solid #f0f0f0;
+        }
+
+        .widget:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+        }
+
+        .widget-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+
+        .widget-title {
+          font-size: 16px;
+          font-weight: 600;
+          color: #666;
+          margin: 0;
+        }
+
+        .add-btn {
+          background: #007bff;
+          color: white;
+          border: none;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 18px;
+          font-weight: bold;
+          transition: background 0.2s;
+        }
+
+        .add-btn:hover {
+          background: #0056b3;
+        }
+
+        .measurement-value {
+          font-size: 48px;
+          font-weight: 700;
+          color: #1a1a1a;
+          margin: 0;
+          line-height: 1;
+        }
+
+        .measurement-unit {
+          font-size: 24px;
+          color: #666;
+          margin-left: 8px;
+        }
+
+        .measurement-date {
+          font-size: 14px;
+          color: #999;
+          margin-top: 8px;
+        }
+
+        .change-indicator {
+          display: flex;
+          align-items: center;
+          margin-top: 12px;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .change-arrow {
+          margin-right: 4px;
+          font-size: 16px;
+        }
+
+        .change-positive {
+          color: #dc3545;
+        }
+
+        .change-negative {
+          color: #28a745;
+        }
+
+        .no-data {
+          text-align: center;
+          color: #999;
+          font-style: italic;
+          padding: 40px 20px;
+        }
+
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+
+        .modal {
+          background: white;
+          border-radius: 16px;
+          padding: 32px;
+          width: 90%;
+          max-width: 400px;
+          box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 24px;
+        }
+
+        .modal-title {
+          font-size: 20px;
+          font-weight: 600;
+          color: #1a1a1a;
+          margin: 0;
+        }
+
+        .close-btn {
+          background: none;
+          border: none;
+          font-size: 24px;
+          color: #999;
+          cursor: pointer;
+          padding: 0;
+          width: 30px;
+          height: 30px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .form-group {
+          margin-bottom: 20px;
+        }
+
+        .form-label {
+          display: block;
+          margin-bottom: 8px;
+          font-weight: 600;
+          color: #333;
+        }
+
+        .form-input {
+          width: 100%;
+          padding: 12px 16px;
+          border: 2px solid #e9ecef;
+          border-radius: 8px;
+          font-size: 16px;
+          transition: border-color 0.2s;
+          box-sizing: border-box;
+        }
+
+        .form-input:focus {
+          outline: none;
+          border-color: #007bff;
+        }
+
+        .form-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .save-btn {
+          width: 100%;
+          background: #007bff;
+          color: white;
+          border: none;
+          padding: 14px;
+          border-radius: 8px;
+          font-size: 16px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background 0.2s;
+        }
+
+        .save-btn:hover:not(:disabled) {
+          background: #0056b3;
+        }
+
+        .save-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+      `}</style>
+
+      <div className="dashboard-container">
+        <div className="dashboard-header">
+          <h1 className="dashboard-title">Health Dashboard</h1>
           <button onClick={signOut} className="logout-btn">
             Sign Out
           </button>
         </div>
 
-        {/* Log New Measurement */}
-        <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', marginBottom: '30px' }}>
-          <h2 style={{ marginBottom: '20px' }}>Log New Measurement</h2>
-          
-          <form onSubmit={saveMeasurement}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Date:</label>
-                <input
-                  type="date"
-                  value={formData.date}
-                  onChange={(e) => setFormData({...formData, date: e.target.value})}
-                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
-                  required
-                />
-              </div>
-              
-              <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Measurement Type:</label>
-                <select
-                  value={formData.measurement_type_id}
-                  onChange={(e) => setFormData({...formData, measurement_type_id: e.target.value})}
-                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
-                  required
+        <div className="widgets-grid">
+          {/* Weight Widget */}
+          <div className="widget">
+            <div className="widget-header">
+              <h3 className="widget-title">Current Weight</h3>
+              {weightType && (
+                <button 
+                  className="add-btn" 
+                  onClick={() => openModal(weightType)}
+                  title="Add weight measurement"
                 >
-                  <option value="">Select type...</option>
-                  {measurementTypes.map(type => (
-                    <option key={type.id} value={type.id}>
-                      {type.name} ({type.unit})
-                    </option>
-                  ))}
-                </select>
+                  +
+                </button>
+              )}
+            </div>
+            
+            {latestMeasurements['Weight'] ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline' }}>
+                  <span className="measurement-value">
+                    {latestMeasurements['Weight'].value}
+                  </span>
+                  <span className="measurement-unit">kg</span>
+                </div>
+                <div className="measurement-date">
+                  {formatDateTime(latestMeasurements['Weight'].date, latestMeasurements['Weight'].created_at)}
+                </div>
+                {previousMeasurements['Weight'] && (() => {
+                  const change = calculateChange(latestMeasurements['Weight'], previousMeasurements['Weight'])
+                  if (change && (change.isIncrease || change.isDecrease)) {
+                    return (
+                      <div className={`change-indicator ${change.isIncrease ? 'change-positive' : 'change-negative'}`}>
+                        <span className="change-arrow">
+                          {change.isIncrease ? '↗' : '↘'}
+                        </span>
+                        {change.value} kg
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+              </>
+            ) : (
+              <div className="no-data">
+                No weight measurements yet.<br />
+                Click + to add your first measurement.
               </div>
-              
-              <div>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                  Value {getSelectedMeasurementType() && `(${getSelectedMeasurementType().unit})`}:
+            )}
+          </div>
+
+          {/* Waist Widget */}
+          <div className="widget">
+            <div className="widget-header">
+              <h3 className="widget-title">Current Waist Circumference</h3>
+              {waistType && (
+                <button 
+                  className="add-btn" 
+                  onClick={() => openModal(waistType)}
+                  title="Add waist measurement"
+                >
+                  +
+                </button>
+              )}
+            </div>
+            
+            {latestMeasurements['Waist'] ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline' }}>
+                  <span className="measurement-value">
+                    {latestMeasurements['Waist'].value}
+                  </span>
+                  <span className="measurement-unit">cm</span>
+                </div>
+                <div className="measurement-date">
+                  {formatDateTime(latestMeasurements['Waist'].date, latestMeasurements['Waist'].created_at)}
+                </div>
+                {previousMeasurements['Waist'] && (() => {
+                  const change = calculateChange(latestMeasurements['Waist'], previousMeasurements['Waist'])
+                  if (change && (change.isIncrease || change.isDecrease)) {
+                    return (
+                      <div className={`change-indicator ${change.isIncrease ? 'change-positive' : 'change-negative'}`}>
+                        <span className="change-arrow">
+                          {change.isIncrease ? '↗' : '↘'}
+                        </span>
+                        {change.value} cm
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+              </>
+            ) : (
+              <div className="no-data">
+                No waist measurements yet.<br />
+                Click + to add your first measurement.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Modal for adding measurements */}
+      {showModal && modalType && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">Add {modalType.name} Measurement</h2>
+              <button className="close-btn" onClick={closeModal}>×</button>
+            </div>
+            
+            <form onSubmit={saveMeasurement}>
+              <div className="form-group">
+                <label className="form-label">
+                  {modalType.name} ({modalType.unit})
                 </label>
                 <input
                   type="number"
                   step="0.1"
-                  placeholder={getSelectedMeasurementType()?.name === 'Weight' ? 'e.g. 85.5' : 'e.g. 92.5'}
-                  value={formData.value}
-                  onChange={(e) => setFormData({...formData, value: e.target.value})}
-                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
+                  placeholder={modalType.name === 'Weight' ? 'e.g. 85.5' : 'e.g. 92.5'}
+                  value={modalData.value}
+                  onChange={(e) => setModalData({...modalData, value: e.target.value})}
+                  className="form-input"
                   required
+                  autoFocus
                 />
               </div>
-            </div>
-            
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Notes (optional):</label>
-              <textarea
-                placeholder="How are you feeling? Any observations..."
-                value={formData.notes}
-                onChange={(e) => setFormData({...formData, notes: e.target.value})}
-                style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd', minHeight: '60px' }}
-              />
-            </div>
-            
-            <button 
-              type="submit" 
-              disabled={saving}
-              style={{ 
-                background: '#007bff', 
-                color: 'white', 
-                border: 'none', 
-                padding: '12px 24px', 
-                borderRadius: '6px', 
-                cursor: saving ? 'not-allowed' : 'pointer',
-                opacity: saving ? 0.7 : 1
-              }}
-            >
-              {saving ? 'Saving...' : 'Save Measurement'}
-            </button>
-          </form>
+              
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Date</label>
+                  <input
+                    type="date"
+                    value={modalData.date}
+                    onChange={(e) => setModalData({...modalData, date: e.target.value})}
+                    className="form-input"
+                    required
+                  />
+                </div>
+                
+                <div className="form-group">
+                  <label className="form-label">Time</label>
+                  <input
+                    type="time"
+                    value={modalData.time}
+                    onChange={(e) => setModalData({...modalData, time: e.target.value})}
+                    className="form-input"
+                    required
+                  />
+                </div>
+              </div>
+              
+              <button 
+                type="submit" 
+                className="save-btn"
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : `Save ${modalType.name}`}
+              </button>
+            </form>
+          </div>
         </div>
-
-        {/* Recent Measurements */}
-        <div>
-          <h2 style={{ marginBottom: '20px' }}>Recent Measurements</h2>
-          
-          {measurements.length === 0 ? (
-            <p style={{ color: '#666', fontStyle: 'italic' }}>No measurements yet. Add your first one above!</p>
-          ) : (
-            <div style={{ background: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead style={{ background: '#f8f9fa' }}>
-                  <tr>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Date</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Type</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Value</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Notes</th>
-                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {measurements.map((measurement, index) => (
-                    <tr key={measurement.id} style={{ background: index % 2 === 0 ? 'white' : '#f9f9f9' }}>
-                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {new Date(measurement.date).toLocaleDateString()}
-                      </td>
-                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {measurement.measurement_types?.name}
-                      </td>
-                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {measurement.value} {measurement.measurement_types?.unit}
-                      </td>
-                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        {measurement.notes || '-'}
-                      </td>
-                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
-                        <button
-                          onClick={() => deleteMeasurement(measurement.id)}
-                          style={{
-                            background: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            padding: '4px 8px',
-                            borderRadius: '4px',
-                            fontSize: '12px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+      )}
+    </>
   )
 }
