@@ -7,6 +7,15 @@ import { useEffect, useState } from 'react'
 export default function Home() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [measurements, setMeasurements] = useState([])
+  const [formData, setFormData] = useState({
+    date: new Date().toISOString().split('T')[0],
+    weight_kg: '',
+    waist_cm: '',
+    notes: ''
+  })
+  const [saving, setSaving] = useState(false)
+  
   const router = useRouter()
   const supabase = createClientComponentClient()
 
@@ -15,6 +24,10 @@ export default function Home() {
       const { data: { user } } = await supabase.auth.getUser()
       setUser(user)
       setLoading(false)
+      
+      if (user) {
+        loadMeasurements()
+      }
     }
 
     getUser()
@@ -23,15 +36,62 @@ export default function Home() {
       (event, session) => {
         if (event === 'SIGNED_IN' && session) {
           setUser(session.user)
+          loadMeasurements()
           router.refresh()
         } else if (event === 'SIGNED_OUT') {
           setUser(null)
+          setMeasurements([])
         }
       }
     )
 
     return () => subscription.unsubscribe()
   }, [router, supabase.auth])
+
+  const loadMeasurements = async () => {
+    const { data, error } = await supabase
+      .from('body_measurements')
+      .select('*')
+      .order('date', { ascending: false })
+      .limit(10)
+    
+    if (error) {
+      console.error('Error loading measurements:', error)
+    } else {
+      setMeasurements(data || [])
+    }
+  }
+
+  const saveMeasurement = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+
+    const { error } = await supabase
+      .from('body_measurements')
+      .upsert({
+        user_id: user.id,
+        date: formData.date,
+        weight_kg: formData.weight_kg ? parseFloat(formData.weight_kg) : null,
+        waist_cm: formData.waist_cm ? parseFloat(formData.waist_cm) : null,
+        notes: formData.notes || null
+      })
+
+    if (error) {
+      console.error('Error saving measurement:', error)
+      alert('Error saving measurement')
+    } else {
+      alert('Measurement saved!')
+      setFormData({
+        date: new Date().toISOString().split('T')[0],
+        weight_kg: '',
+        waist_cm: '',
+        notes: ''
+      })
+      loadMeasurements()
+    }
+    
+    setSaving(false)
+  }
 
   const signInWithGoogle = async () => {
     await supabase.auth.signInWithOAuth({
@@ -81,17 +141,122 @@ export default function Home() {
   return (
     <div className="container">
       <div className="dashboard">
-        <h1>Dashboard</h1>
-        
-        <div className="user-info">
-          <p><strong>Welcome:</strong> {user.email}</p>
-          <p><strong>User ID:</strong> {user.id}</p>
-          <p><strong>Last sign in:</strong> {new Date(user.last_sign_in_at).toLocaleString()}</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+          <h1>Health Tracker Dashboard</h1>
+          <button onClick={signOut} className="logout-btn">
+            Sign Out
+          </button>
         </div>
 
-        <button onClick={signOut} className="logout-btn">
-          Sign Out
-        </button>
+        {/* Log New Measurement */}
+        <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', marginBottom: '30px' }}>
+          <h2 style={{ marginBottom: '20px' }}>Log Today's Measurements</h2>
+          
+          <form onSubmit={saveMeasurement}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Date:</label>
+                <input
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => setFormData({...formData, date: e.target.value})}
+                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
+                  required
+                />
+              </div>
+              
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Weight (kg):</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g. 85.5"
+                  value={formData.weight_kg}
+                  onChange={(e) => setFormData({...formData, weight_kg: e.target.value})}
+                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
+                />
+              </div>
+              
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Waist (cm):</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g. 92.5"
+                  value={formData.waist_cm}
+                  onChange={(e) => setFormData({...formData, waist_cm: e.target.value})}
+                  style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }}
+                />
+              </div>
+            </div>
+            
+            <div style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Notes (optional):</label>
+              <textarea
+                placeholder="How are you feeling? Any observations..."
+                value={formData.notes}
+                onChange={(e) => setFormData({...formData, notes: e.target.value})}
+                style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd', minHeight: '60px' }}
+              />
+            </div>
+            
+            <button 
+              type="submit" 
+              disabled={saving}
+              style={{ 
+                background: '#007bff', 
+                color: 'white', 
+                border: 'none', 
+                padding: '12px 24px', 
+                borderRadius: '6px', 
+                cursor: saving ? 'not-allowed' : 'pointer',
+                opacity: saving ? 0.7 : 1
+              }}
+            >
+              {saving ? 'Saving...' : 'Save Measurement'}
+            </button>
+          </form>
+        </div>
+
+        {/* Recent Measurements */}
+        <div>
+          <h2 style={{ marginBottom: '20px' }}>Recent Measurements</h2>
+          
+          {measurements.length === 0 ? (
+            <p style={{ color: '#666', fontStyle: 'italic' }}>No measurements yet. Add your first one above!</p>
+          ) : (
+            <div style={{ background: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ background: '#f8f9fa' }}>
+                  <tr>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Date</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Weight (kg)</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Waist (cm)</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {measurements.map((measurement, index) => (
+                    <tr key={measurement.id} style={{ background: index % 2 === 0 ? 'white' : '#f9f9f9' }}>
+                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                        {new Date(measurement.date).toLocaleDateString()}
+                      </td>
+                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                        {measurement.weight_kg || '-'}
+                      </td>
+                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                        {measurement.waist_cm || '-'}
+                      </td>
+                      <td style={{ padding: '12px', borderBottom: '1px solid #eee' }}>
+                        {measurement.notes || '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
